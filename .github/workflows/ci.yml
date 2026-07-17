@@ -19,22 +19,21 @@ jobs:
           cache: "npm"
 
       # Lockfile-drift guard: verify the committed lockfile is in sync with
-      # package.json by regenerating it and comparing (ignoring the
-      # platform-specific fsevents entry which varies across Node versions).
+      # package.json by regenerating it and comparing (ignoring all
+      # platform-specific fsevents entries which vary across Node/npm versions).
       - name: Check lockfile is in sync
         run: |
           cp package-lock.json /tmp/pkg-lock-orig.json
           npm install --package-lock-only --ignore-scripts
-          # Restore the fsevents block from the original so the diff only
-          # reflects substantive changes.
+          # Strip ALL fsevents entries (top-level and nested) before comparing,
+          # because this platform-specific optional dependency varies across
+          # Node/npm versions.
           node -e "
             const orig = require('fs').readFileSync('/tmp/pkg-lock-orig.json','utf8');
             const curr = require('fs').readFileSync('package-lock.json','utf8');
-            // Remove ALL fsevents entries — the platform-specific optional dep
-            // varies across Node/npm versions and should be ignored for sync checks.
-            const re = /\"node_modules\/fsevents\": \{[\s\S]*?\n    \},?\n?/g;
-            const origClean = orig.replace(re, '');
-            const currClean = curr.replace(re, '');
+            const stripFsevents = (s) => s.replace(/\"node_modules(\\/[^\"]+)*\\/fsevents\": \{[\\s\\S]*?\n    \},?\n?/g, '');
+            const origClean = stripFsevents(orig);
+            const currClean = stripFsevents(curr);
             if (origClean !== currClean) {
               console.error('Lockfile is out of sync with package.json');
               process.exit(1);
