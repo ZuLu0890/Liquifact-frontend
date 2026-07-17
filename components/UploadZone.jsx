@@ -73,7 +73,8 @@ function Spinner({ className = "" }) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
-      aria-hidden="true"
+      role="img"
+      aria-label="Loading"
     >
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path
@@ -247,8 +248,9 @@ function UploadZone({ onUploadSuccess, progress }) {
             <span className="text-3xl" aria-hidden="true">
               {"\u2705"}
             </span>
-            <p 
-              className="font-medium text-emerald-400" 
+            <p
+              className="font-medium text-emerald-400"
+              /* eslint-disable-next-line react/no-danger -- safe: filename is HTML-escaped by sanitizeFilename */
               dangerouslySetInnerHTML={{ __html: sanitizeFilename(file.name) }}
             />
             <p className="text-xs text-slate-500">
