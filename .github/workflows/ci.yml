@@ -30,7 +30,9 @@ jobs:
           node -e "
             const orig = require('fs').readFileSync('/tmp/pkg-lock-orig.json','utf8');
             const curr = require('fs').readFileSync('package-lock.json','utf8');
-            const re = /\"node_modules\\/playwright\\/node_modules\\/fsevents\": \{[\s\S]*?\n    \},?\n?/g;
+            // Remove ALL fsevents entries — the platform-specific optional dep
+            // varies across Node/npm versions and should be ignored for sync checks.
+            const re = /\"node_modules\/fsevents\": \{[\s\S]*?\n    \},?\n?/g;
             const origClean = orig.replace(re, '');
             const currClean = curr.replace(re, '');
             if (origClean !== currClean) {
