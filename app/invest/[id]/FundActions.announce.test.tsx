@@ -27,7 +27,7 @@ jest.mock("@/components/ToastProvider", () => ({
   useToast: () => mockToast,
 }));
 
-jest.mock("@/components/WalletContext", () => ({
+jest.mock("@/components/WalletProvider", () => ({
   WALLET_STATES: {
     DISCONNECTED: "disconnected",
     CONNECTING: "connecting",
@@ -48,7 +48,7 @@ jest.mock("@/app/invest/MarketplaceContext", () => ({
 }));
 
 import FundActions from "./FundActions";
-import { useWallet, WALLET_STATES } from "@/components/WalletContext";
+import { useWallet, WALLET_STATES } from "@/components/WalletProvider";
 import { copy } from "@/app/copy/en";
 
 const mockUseWallet = useWallet as jest.MockedFunction<typeof useWallet>;

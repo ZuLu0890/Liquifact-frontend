@@ -326,7 +326,7 @@ jest.mock("@/components/ToastProvider", () => ({
   useToast: () => ({ success: jest.fn(), error: jest.fn(), info: jest.fn() }),
 }));
 
-jest.mock("@/components/WalletContext", () => ({
+jest.mock("@/components/WalletProvider", () => ({
   WALLET_STATES: {
     DISCONNECTED: "disconnected",
     CONNECTING: "connecting",
