@@ -8,6 +8,12 @@ import { WalletProvider, useWallet } from "./WalletProvider";
 import WalletStatus from "./WalletStatus";
 import { copy } from "../app/copy/en";
 
+jest.mock("@stellar/freighter-api", () => ({
+  isConnected: jest.fn().mockResolvedValue(false),
+  requestAccess: jest.fn(),
+  getNetworkDetails: jest.fn(),
+}));
+
 function TestHarness() {
   const { state } = useWallet();
   return (
@@ -37,7 +43,6 @@ describe("WalletStatus external navigation", () => {
     jest.useFakeTimers();
     openSpy = jest.spyOn(window, "open").mockImplementation();
     errorSpy = jest.spyOn(console, "error").mockImplementation();
-    jest.spyOn(Math, "random").mockReturnValue(0.8); // index 3 -> 'no_wallet'
     originalUrl = copy.wallet.installWalletUrl;
   });
 
@@ -47,21 +52,20 @@ describe("WalletStatus external navigation", () => {
     jest.restoreAllMocks();
   });
 
-  async function navigateToNoWalletState() {
+  async function connectToReachNoWalletState() {
     renderWithProviders();
     const button = screen.getByRole("button", { name: /connect wallet/i });
 
-    // fireEvent triggers immediately without conflicting with the fake timer queue
     fireEvent.click(button);
 
-    // Advance the mock timers forward to clear the mock delay logic safely
+    // Allow the async connect flow to resolve
     await act(async () => {
-      jest.advanceTimersByTime(1500);
+      await Promise.resolve();
     });
   }
 
   it("opens the trusted wallet URL with noopener and noreferrer", async () => {
-    await navigateToNoWalletState();
+    await connectToReachNoWalletState();
 
     const installButton = screen.getByRole("button", { name: /install/i });
     fireEvent.click(installButton);
@@ -77,7 +81,7 @@ describe("WalletStatus external navigation", () => {
 
   it("blocks an insecure (http) URL and logs an error", async () => {
     copy.wallet.installWalletUrl = "http://insecure-wallet-site.com";
-    await navigateToNoWalletState();
+    await connectToReachNoWalletState();
 
     const installButton = screen.getByRole("button", { name: /install/i });
     fireEvent.click(installButton);

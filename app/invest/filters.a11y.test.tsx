@@ -2,22 +2,46 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { axe, toHaveNoViolations } from "jest-axe";
 import { InvestMarketplace } from "./page";
+import { WalletProvider } from "@/components/WalletProvider";
+import { ToastProvider } from "@/components/ToastProvider";
 
 expect.extend(toHaveNoViolations);
 
 // Mock next/navigation hooks to prevent Next.js router errors
 jest.mock("next/navigation", () => ({
+  usePathname: () => "/invest",
   useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({
     replace: jest.fn(),
   }),
 }));
 
+jest.mock("@/app/invest/MarketplaceContext", () => {
+  const React = require("react");
+  return {
+    __esModule: true,
+    useMarketplace: function () {
+      const [invoices, setInvoices] = React.useState(null);
+      const [pendingIds] = React.useState(new Set());
+      return { invoices, setInvoices, pendingIds, fundInvoice: jest.fn().mockResolvedValue(true) };
+    },
+    MarketplaceProvider: function ({ children }: { children: React.ReactNode }) {
+      return children;
+    },
+  };
+});
+
 describe("InvestMarketplace - Coming Soon Filters A11y", () => {
   const mockLoadInvoices = jest.fn(() => Promise.resolve([]));
 
   it("should render the filters wrapped in a fieldset with coming soon semantics", () => {
-    render(<InvestMarketplace loadInvoices={mockLoadInvoices} />);
+    render(
+      <ToastProvider>
+        <WalletProvider>
+          <InvestMarketplace loadInvoices={mockLoadInvoices} />
+        </WalletProvider>
+      </ToastProvider>
+    );
 
     // Check for the fieldset acting as the accessible wrapper
     const fieldset = screen.getByRole("group", { name: /Marketplace Filters/i });
@@ -37,7 +61,13 @@ describe("InvestMarketplace - Coming Soon Filters A11y", () => {
   });
 
   it("should have no accessibility violations with the coming soon semantics applied", async () => {
-    const { container } = render(<InvestMarketplace loadInvoices={mockLoadInvoices} />);
+    const { container } = render(
+      <ToastProvider>
+        <WalletProvider>
+          <InvestMarketplace loadInvoices={mockLoadInvoices} />
+        </WalletProvider>
+      </ToastProvider>
+    );
 
     // Run jest-axe to ensure our 'coming soon' opacity and wrapper do not violate contrast or structural rules
     const results = await axe(container);

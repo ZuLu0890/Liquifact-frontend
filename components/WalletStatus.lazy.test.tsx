@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { axe, toHaveNoViolations } from "jest-axe";
+import "jest-axe/extend-expect";
 import "@testing-library/jest-dom";
 import { ToastProvider } from "./ToastProvider";
 
@@ -15,11 +16,11 @@ function renderLazy() {
 
 // ── Mock next/dynamic so we can control lazy-load timing in tests ──
 jest.mock("next/dynamic", () => {
-  const ReactForMock = require("react");
+  return function dynamicMock(importFunc, options) {
+    const ReactForMock = require("react");
 
-  return function dynamicMock(importFunc: () => Promise<any>, options: any) {
-    function DynamicWrapper(props: any) {
-      const [Component, setComponent] = ReactForMock.useState<any>(null);
+    function DynamicWrapper(props) {
+      const [Component, setComponent] = ReactForMock.useState(null);
       const [isLoading, setIsLoading] = ReactForMock.useState(true);
 
       ReactForMock.useEffect(() => {
@@ -37,23 +38,22 @@ jest.mock("next/dynamic", () => {
 
       if (isLoading && options?.loading) {
         const LoadingComponent = options.loading;
-        return React.createElement(LoadingComponent, props);
+        return ReactForMock.createElement(LoadingComponent, props);
       }
 
       if (Component) {
-        return <Component {...props} />;
+        return ReactForMock.createElement(Component, props);
       }
 
       return null;
     }
 
     DynamicWrapper.displayName = "DynamicWrapper";
-    const SuspenseWrapper: React.FC<any> = (props) => {
-      const inlineReact = require("react");
-      return (
-        <inlineReact.Suspense fallback={options?.loading ? <options.loading {...props} /> : null}>
-          <DynamicWrapper {...props} />
-        </inlineReact.Suspense>
+    const SuspenseWrapper = (props) => {
+      return ReactForMock.createElement(
+        ReactForMock.Suspense,
+        { fallback: options?.loading ? ReactForMock.createElement(options.loading, props) : null },
+        ReactForMock.createElement(DynamicWrapper, props)
       );
     };
     SuspenseWrapper.displayName = "SuspenseWrapper";
@@ -65,18 +65,23 @@ jest.mock("next/dynamic", () => {
 const mockConnectWallet = jest.fn();
 const mockDisconnectWallet = jest.fn();
 
-jest.mock("./WalletProvider", () => ({
-  ...jest.requireActual("./WalletProvider"),
-  useWallet: () => ({
-    state: "disconnected",
-    walletData: null,
-    error: null,
-    connect: mockConnectWallet,
-    disconnect: mockDisconnectWallet,
-  }),
-}));
+jest.mock("./WalletProvider", () => {
+  const actual = jest.requireActual("./WalletProvider");
+  return {
+    ...actual,
+    __esModule: true,
+    useWallet: () => ({
+      state: "disconnected",
+      walletData: null,
+      error: null,
+      connect: mockConnectWallet,
+      disconnect: mockDisconnectWallet,
+    }),
+  };
+});
 
 jest.mock("./ToastProvider", () => ({
+  ...jest.requireActual("./ToastProvider"),
   useToast: () => ({
     success: jest.fn(),
     error: jest.fn(),

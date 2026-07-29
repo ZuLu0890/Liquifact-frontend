@@ -9,6 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
+import ToastErrorBoundary from "./toast/ToastErrorBoundary";
+import { ToastStack } from "./toast/ToastStack";
 
 const ToastContext = createContext(null);
 export { ToastContext };
@@ -51,6 +53,24 @@ function createToast({ variant = "info", title, message }) {
   };
 }
 
+function canReceiveFocus(el) {
+  return (
+    el instanceof HTMLElement &&
+    typeof el.focus === "function" &&
+    !el.hasAttribute("disabled") &&
+    el.isConnected
+  );
+}
+
+function restoreFocusTo(el) {
+  if (!canReceiveFocus(el)) return;
+  queueMicrotask(() => {
+    if (canReceiveFocus(el)) {
+      el.focus();
+    }
+  });
+}
+
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
   const timers = useRef(new Map());
@@ -60,6 +80,10 @@ export function ToastProvider({ children }) {
   const preDismissFocusRef = useRef(null);
   // Ref to the toast container so we can detect focus moving outside it.
   const containerRef = useRef(null);
+  // Captures document.activeElement at the moment addToast is called. This is the
+  // fallback for document-level Escape handling, where focus never enters the toast
+  // (so onFocus never fires to populate preDismissFocusRef).
+  const addTimeFocusRef = useRef(null);
 
   const clearToastTimer = useCallback((id) => {
     const timeout = timers.current.get(id);
@@ -88,6 +112,13 @@ export function ToastProvider({ children }) {
 
   const addToast = useCallback(
     ({ variant, title, message }) => {
+      // Snapshot the currently focused element so document-level Escape can
+      // restore focus even when the toast never receives focus directly.
+      const activeEl = document.activeElement;
+      if (activeEl && activeEl !== document.body && canReceiveFocus(activeEl)) {
+        addTimeFocusRef.current = activeEl;
+      }
+
       const nextToast = createToast({ variant, title, message });
       const key = nextToast.key;
       let timerAction = null;
@@ -98,7 +129,14 @@ export function ToastProvider({ children }) {
         if (existingIndex !== -1) {
           const existingToast = current[existingIndex];
           timerAction = { type: "refresh", id: existingToast.id };
-          return current;
+          // Bump the existing toast to the front (newest position) so
+          // re-triggered messages appear at the top of the stack.
+          if (existingIndex === 0) return current;
+          return [
+            existingToast,
+            ...current.slice(0, existingIndex),
+            ...current.slice(existingIndex + 1),
+          ];
         }
 
         if (current.length >= MAX_TOASTS) {
@@ -159,9 +197,10 @@ export function ToastProvider({ children }) {
 
   // Dismiss the toast and return focus to the element that was active before the
   // user tabbed into the toast region. This prevents focus from falling to <body>.
+  // Falls back to the element captured at addToast time for document-level Escape.
   const dismissAndReturnFocus = useCallback(
     (id) => {
-      const target = preDismissFocusRef.current;
+      const target = preDismissFocusRef.current || addTimeFocusRef.current;
       removeToast(id);
       // Restore focus after React has removed the toast from the DOM.
       if (target && typeof target.focus === "function") {
@@ -171,6 +210,28 @@ export function ToastProvider({ children }) {
     },
     [removeToast]
   );
+
+  // Document-level Escape listener so that pressing Escape dismisses the most
+  // recent toast regardless of where focus is (e.g. still on a trigger button or
+  // an unrelated input). The per-toast onKeyDown handles the case where the toast
+  // card itself is focused.
+  useEffect(() => {
+    if (toasts.length === 0) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      // Let the per-toast onKeyDown handle it when focus is inside the toast region.
+      if (containerRef.current?.contains(e.target)) return;
+      e.preventDefault();
+      const mostRecent = toasts[0];
+      if (mostRecent) {
+        dismissAndReturnFocus(mostRecent.id);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [toasts, dismissAndReturnFocus]);
 
   useEffect(() => {
     const currentTimers = timers.current;
@@ -189,78 +250,43 @@ export function ToastProvider({ children }) {
     [addToast]
   );
 
+  // The visible stack below is a single aria-live="polite" region, so every
+  // toast add/remove re-announces the *entire* stack's text to assistive
+  // tech, not just what changed. That's tolerable for routine success/info
+  // notices, but an error deserves to interrupt and be heard on its own
+  // rather than get buried in — or diluted by — that batched announcement.
+  // This separate, visually-hidden aria-live="assertive" region tracks only
+  // the newest error currently in the stack and is decoupled from the
+  // polite region above, so an error's title/message gets its own
+  // assertive announcement independent of whatever else is in the stack.
+  // It intentionally has no ARIA role (just aria-live) so it never competes
+  // with role="status"/role="alert" queries elsewhere in the toast tree.
+  const latestError = toasts.find((toast) => toast.variant === "error");
+  const assertiveAnnouncement = latestError
+    ? [latestError.title, latestError.message].filter(Boolean).join(": ")
+    : "";
+
   return (
     <ToastContext.Provider value={value}>
       {children}
 
-      <div
-        aria-live="polite"
-        role="status"
-        ref={containerRef}
-        className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4 sm:justify-end sm:px-6"
-      >
-        <div className="flex w-full max-w-md flex-col gap-3">
-          {toasts.map((toast) => {
-            const variant = VARIANT_STYLES[toast.variant] || VARIANT_STYLES.info;
-
-            return (
-              <div
-                key={toast.id}
-                // tabIndex={0} makes the card itself focusable so keyboard users can
-                // reach it via Tab and then use Escape to dismiss without having to
-                // navigate to the Close button first.
-                tabIndex={0}
-                onMouseEnter={() => pauseToast(toast.id)}
-                onMouseLeave={() => resumeToast(toast.id)}
-                // Mirror hover pause/resume for keyboard users: focusing the card (or
-                // any element inside it) pauses the timer; blurring resumes it.
-                onFocus={(e) => {
-                  // Record the previously-focused element the first time focus enters
-                  // this toast so we can restore it on dismissal.
-                  if (!containerRef.current?.contains(e.relatedTarget)) {
-                    preDismissFocusRef.current = e.relatedTarget;
-                  }
-                  pauseToast(toast.id);
-                }}
-                onBlur={(e) => {
-                  // Only resume if focus has left this toast entirely (not just moved
-                  // between the card and its Close button).
-                  if (!containerRef.current?.contains(e.relatedTarget)) {
-                    resumeToast(toast.id);
-                  }
-                }}
-                // Escape dismisses the currently-focused toast, matching common dialog
-                // and menu patterns so keyboard users have a single consistent shortcut.
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    dismissAndReturnFocus(toast.id);
-                  }
-                }}
-                className={`pointer-events-auto overflow-hidden rounded-3xl border p-4 shadow-2xl shadow-slate-950/30 transition duration-200 ${variant.base}`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 text-xl" aria-hidden="true">
-                    {variant.icon}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-100">{toast.title}</p>
-                    <p className="mt-1 text-sm leading-6 text-slate-300">{toast.message}</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="rounded-full border border-slate-700/80 bg-slate-950/70 px-2.5 py-1 text-xs font-semibold text-slate-100 outline-none transition duration-150 hover:bg-slate-900 focus-visible:ring-2 focus-visible:ring-cyan-400"
-                    aria-label="Dismiss notification"
-                    onClick={() => dismissAndReturnFocus(toast.id)}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      <div aria-live="assertive" className="sr-only" data-testid="toast-assertive-announcer">
+        {assertiveAnnouncement}
       </div>
+
+      <ToastErrorBoundary>
+        <ToastStack
+          toasts={toasts}
+          variantStyles={VARIANT_STYLES}
+          containerRef={containerRef}
+          pauseToast={pauseToast}
+          resumeToast={resumeToast}
+          dismissAndReturnFocus={dismissAndReturnFocus}
+          recordPreDismissFocus={(el) => {
+            preDismissFocusRef.current = el;
+          }}
+        />
+      </ToastErrorBoundary>
     </ToastContext.Provider>
   );
 }
@@ -268,7 +294,10 @@ export function ToastProvider({ children }) {
 export function useToast() {
   const context = useContext(ToastContext);
   if (!context) {
-    throw new Error("useToast must be used within a ToastProvider");
+    // Return a no-op toast so callers outside a ToastProvider do not crash.
+    // This is a safety net for tests and edge cases where CopyButton (or
+    // other consumers) is rendered without a provider.
+    return { success: () => {}, error: () => {}, info: () => {}, dismiss: () => {} };
   }
   return context;
 }

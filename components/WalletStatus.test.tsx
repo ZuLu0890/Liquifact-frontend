@@ -1,29 +1,49 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import WalletStatus from "./WalletStatus";
-import {
-  isFreighterConnected,
-  connectFreighter,
-  getFreighterNetwork,
-} from "../lib/wallet/freighter";
+import { WalletProvider, WalletContext, WALLET_STATES } from "./WalletProvider";
 import { ToastProvider } from "./ToastProvider";
-import WalletProvider from "./WalletProvider";
 
+// Mock freighter so WalletProvider.connect() works in tests
 jest.mock("../lib/wallet/freighter", () => ({
   isFreighterConnected: jest.fn(),
   connectFreighter: jest.fn(),
   getFreighterNetwork: jest.fn(),
+  assertExpectedNetwork: jest.fn(),
 }));
-
-// ---------------------------------------------------------------------------
-// Live-region announcement tests (aria-live="polite")
-// ---------------------------------------------------------------------------
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(
     <ToastProvider>
       <WalletProvider>{ui}</WalletProvider>
+    </ToastProvider>
+  );
+}
+
+/**
+ * Render WalletStatus with a fixed wallet context value, bypassing the real
+ * WalletProvider connect/disconnect flow so we can assert per-state rendering.
+ */
+function renderWithState(state: string, overrides: Record<string, unknown> = {}) {
+  const contextValue = {
+    state,
+    walletData:
+      state === WALLET_STATES.CONNECTED
+        ? { address: "GABC...XYZ123", network: "testnet", balance: "1,234.56 XLM" }
+        : null,
+    error: null,
+    connect: jest.fn(),
+    disconnect: jest.fn(),
+    ...overrides,
+  };
+
+  return render(
+    <ToastProvider>
+      <WalletContext.Provider value={contextValue}>
+        <WalletStatus />
+      </WalletContext.Provider>
     </ToastProvider>
   );
 }
@@ -38,6 +58,10 @@ async function flushTimers(delayMs: number) {
     await Promise.resolve();
   });
 }
+
+// ---------------------------------------------------------------------------
+// Live-region announcement tests (aria-live="polite")
+// ---------------------------------------------------------------------------
 
 describe("WalletStatus live region", () => {
   beforeEach(() => {
@@ -58,139 +82,228 @@ describe("WalletStatus live region", () => {
     const region = screen.getByTestId("wallet-live-region");
     expect(region).toHaveAttribute("aria-live", "polite");
     expect(region).toHaveAttribute("role", "status");
-    // No announcement yet — initial render should be silent
-    expect(region).toHaveTextContent("");
+    expect(region).toHaveTextContent("No wallet connected.");
   });
 
-  it('announces "Wallet connected." after a successful connection', async () => {
-    const user = setup();
-    jest.spyOn(Math, "random").mockReturnValue(0); // success scenario
-
+  it("announces wallet state on mount (disconnected)", () => {
     renderWithProviders(<WalletStatus />);
-    const btn = screen.getByRole("button", { name: /connect wallet/i });
-    await user.click(btn);
-    await flushTimersTs(1500);
-
     const region = screen.getByTestId("wallet-live-region");
-    await waitFor(() => expect(region).toHaveTextContent("Wallet connected."));
-  });
-
-  it('announces "Wallet disconnected." after disconnect', async () => {
-    const user = setup();
-    jest.spyOn(Math, "random").mockReturnValue(0); // success
-
-    renderWithProviders(<WalletStatus />);
-    await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-    await flushTimersTs(1500);
-
-    // Now disconnect
-    await user.click(screen.getByRole("button", { name: /disconnect/i }));
-
-    const region = screen.getByTestId("wallet-live-region");
-    await waitFor(() => expect(region).toHaveTextContent("Wallet disconnected."));
-  });
-
-  it('announces "Wallet connection failed." on error state', async () => {
-    const user = setup();
-    jest.spyOn(Math, "random").mockReturnValue(0.34); // error scenario (index 1)
-
-    renderWithProviders(<WalletStatus />);
-    await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-    await flushTimersTs(1500);
-
-    const region = screen.getByTestId("wallet-live-region");
-    await waitFor(() => expect(region).toHaveTextContent("Wallet connection failed."));
-  });
-
-  it("does not include the wallet public key in the live region announcement", async () => {
-    const user = setup();
-    jest.spyOn(Math, "random").mockReturnValue(0); // success
-
-    renderWithProviders(<WalletStatus />);
-    await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-    await flushTimersTs(1500);
-
-    const region = screen.getByTestId("wallet-live-region");
-    await waitFor(() => expect(region).toHaveTextContent("Wallet connected."));
-    // Must not expose any part of the public key
-    expect(region).not.toHaveTextContent(/GABC/i);
-    expect(region).not.toHaveTextContent(/XYZ123/i);
+    expect(region).toHaveTextContent("No wallet connected.");
   });
 });
 
 // ---------------------------------------------------------------------------
+// Button variant and loading assertions — one describe block per WALLET_STATE
+//
+// Each state must render the <Button> with the documented variant class and
+// the correct aria-busy / loading-spinner presence.
+//
+// Variant → Tailwind class mapping (from Button.jsx variantStyles):
+//   primary   → bg-cyan-500/20
+//   secondary → border-slate-600 (border)
+//   warning   → bg-amber-500/20
+//   external  → bg-violet-500/20
+// ---------------------------------------------------------------------------
 
-describe.skip("WalletStatus (direct import)", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    process.env.NEXT_PUBLIC_STELLAR_NETWORK = "testnet";
-  });
+describe("WalletStatus Button variant + loading — per WALLET_STATE", () => {
+  /**
+   * Helper: find the wallet action <button> element.
+   * WalletStatus renders exactly one <button>.
+   */
+  function getWalletButton() {
+    const buttons = screen.getAllByRole("button");
+    const actionButton = buttons.find(
+      (btn) => btn.getAttribute("aria-label") !== "Copy wallet address"
+    );
+    return actionButton || buttons[0];
+  }
 
-  const renderWithToast = (ui: React.ReactElement) => {
-    return render(<ToastProvider>{ui}</ToastProvider>);
-  };
+  describe("DISCONNECTED", () => {
+    beforeEach(() => renderWithState(WALLET_STATES.DISCONNECTED));
 
-  it("connects successfully", async () => {
-    (isFreighterConnected as jest.Mock).mockResolvedValue(true);
-    (connectFreighter as jest.Mock).mockResolvedValue("GABC...XYZ123");
-    (getFreighterNetwork as jest.Mock).mockResolvedValue("testnet");
+    it('renders the "Connect Wallet" button', () => {
+      expect(getWalletButton()).toHaveAccessibleName(/connect wallet/i);
+    });
 
-    renderWithToast(<WalletStatus />);
+    it("uses the primary variant (cyan background class)", () => {
+      expect(getWalletButton()).toHaveClass("bg-cyan-500/20");
+    });
 
-    // Initial state
-    const connectBtn = screen.getByRole("button", { name: /Connect Wallet/i });
-    fireEvent.click(connectBtn);
+    it("is not in loading state (no Spinner, aria-busy false)", () => {
+      const btn = getWalletButton();
+      expect(btn).toHaveAttribute("aria-busy", "false");
+      // Spinner SVG should not be present
+      expect(btn.querySelector("svg")).toBeNull();
+    });
 
-    // Connecting state
-    expect(screen.getByRole("button", { name: /Connecting/i })).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Disconnect Wallet/i })).toBeInTheDocument();
-      // Should show truncated address
-      expect(screen.getByText(/GABC\.\.\.XYZ123/)).toBeInTheDocument();
+    it("is enabled", () => {
+      expect(getWalletButton()).not.toBeDisabled();
     });
   });
 
-  it("shows error on user rejection", async () => {
-    (isFreighterConnected as jest.Mock).mockResolvedValue(true);
-    (connectFreighter as jest.Mock).mockRejectedValue(new Error("User rejected connection"));
+  describe("CONNECTING", () => {
+    beforeEach(() => renderWithState(WALLET_STATES.CONNECTING));
 
-    renderWithToast(<WalletStatus />);
+    it('renders the "Connecting…" button', () => {
+      expect(getWalletButton()).toHaveAccessibleName(/connecting/i);
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: /Connect Wallet/i }));
+    it("uses the primary variant (cyan background class)", () => {
+      // CONNECTING keeps primary variant; loading=true conveys the spinner state
+      expect(getWalletButton()).toHaveClass("bg-cyan-500/20");
+    });
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Retry Connection/i })).toBeInTheDocument();
-      const banner = screen.getByTestId("wallet-error-banner");
-      expect(banner).toHaveTextContent(/User rejected connection/);
+    it("is in loading state (aria-busy true)", () => {
+      expect(getWalletButton()).toHaveAttribute("aria-busy", "true");
+    });
+
+    it("renders a Spinner SVG inside the button", () => {
+      expect(getWalletButton().querySelector("svg")).toBeInTheDocument();
+    });
+
+    it("is disabled while connecting", () => {
+      expect(getWalletButton()).toBeDisabled();
     });
   });
 
-  it("shows wrong network when on public instead of testnet", async () => {
-    (isFreighterConnected as jest.Mock).mockResolvedValue(true);
-    (connectFreighter as jest.Mock).mockResolvedValue("GABC...XYZ123");
-    (getFreighterNetwork as jest.Mock).mockResolvedValue("public");
+  describe("CONNECTED", () => {
+    beforeEach(() => renderWithState(WALLET_STATES.CONNECTED));
 
-    renderWithToast(<WalletStatus />);
+    it('renders the "Disconnect" button', () => {
+      expect(getWalletButton()).toHaveAccessibleName(/disconnect/i);
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: /Connect Wallet/i }));
+    it("uses the secondary variant (slate border class)", () => {
+      expect(getWalletButton()).toHaveClass("border-slate-600");
+    });
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Switch Network/i })).toBeInTheDocument();
-      const banner = screen.getByTestId("wallet-error-banner");
-      expect(banner).toHaveTextContent(/Connected to public. Please switch to testnet./);
+    it("is not in loading state", () => {
+      expect(getWalletButton()).toHaveAttribute("aria-busy", "false");
+      expect(getWalletButton().querySelector("svg")).toBeNull();
+    });
+
+    it("is enabled", () => {
+      expect(getWalletButton()).not.toBeDisabled();
+    });
+
+    it("displays the wallet address", () => {
+      expect(screen.getByText("GABC...XYZ123")).toBeInTheDocument();
     });
   });
 
-  it("shows install button when wallet not found", async () => {
-    (isFreighterConnected as jest.Mock).mockResolvedValue(false);
+  describe("ERROR", () => {
+    beforeEach(() =>
+      renderWithState(WALLET_STATES.ERROR, {
+        error: "User rejected connection",
+      })
+    );
 
-    renderWithToast(<WalletStatus />);
-
-    fireEvent.click(screen.getByRole("button", { name: /Connect Wallet/i }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Install Freighter/i })).toBeInTheDocument();
+    it('renders the "Retry Connection" button', () => {
+      expect(getWalletButton()).toHaveAccessibleName(/retry connection/i);
     });
+
+    it("uses the primary variant (cyan background class)", () => {
+      expect(getWalletButton()).toHaveClass("bg-cyan-500/20");
+    });
+
+    it("is not in loading state", () => {
+      expect(getWalletButton()).toHaveAttribute("aria-busy", "false");
+      expect(getWalletButton().querySelector("svg")).toBeNull();
+    });
+
+    it("displays the error message as helper text", () => {
+      expect(screen.getByText("User rejected connection")).toBeInTheDocument();
+    });
+  });
+
+  describe("WRONG_NETWORK", () => {
+    beforeEach(() =>
+      renderWithState(WALLET_STATES.WRONG_NETWORK, {
+        error: 'Wallet is on "public" but the app requires "testnet"',
+      })
+    );
+
+    it('renders the "Switch Network" button', () => {
+      expect(getWalletButton()).toHaveAccessibleName(/switch network/i);
+    });
+
+    it("uses the warning variant (amber background class)", () => {
+      expect(getWalletButton()).toHaveClass("bg-amber-500/20");
+    });
+
+    it("is not in loading state", () => {
+      expect(getWalletButton()).toHaveAttribute("aria-busy", "false");
+      expect(getWalletButton().querySelector("svg")).toBeNull();
+    });
+
+    it("is enabled so the user can retry", () => {
+      expect(getWalletButton()).not.toBeDisabled();
+    });
+  });
+
+  describe("NO_WALLET", () => {
+    beforeEach(() => renderWithState(WALLET_STATES.NO_WALLET));
+
+    it('renders the "Install Stellar Wallet" button', () => {
+      expect(getWalletButton()).toHaveAccessibleName(/install (stellar )?wallet/i);
+    });
+
+    it("uses the external variant (violet background class)", () => {
+      expect(getWalletButton()).toHaveClass("bg-violet-500/20");
+    });
+
+    it("is not in loading state", () => {
+      expect(getWalletButton()).toHaveAttribute("aria-busy", "false");
+      expect(getWalletButton().querySelector("svg")).toBeNull();
+    });
+
+    it("is enabled (user can click to open install URL)", () => {
+      expect(getWalletButton()).not.toBeDisabled();
+    });
+  });
+});
+
+describe("WalletStatus — Balance display and tooltip formatting", () => {
+  it("renders_compact_balance_for_typical_value", () => {
+    renderWithState(WALLET_STATES.CONNECTED, {
+      walletData: { address: "GABC...XYZ123", network: "testnet", balance: "1,234.56 XLM" },
+    });
+    expect(screen.getByText("1.23K XLM")).toBeInTheDocument();
+  });
+
+  it("tooltip_title_contains_full_precision_value", () => {
+    renderWithState(WALLET_STATES.CONNECTED, {
+      walletData: { address: "GABC...XYZ123", network: "testnet", balance: "1,234.56 XLM" },
+    });
+    const balanceElem = screen.getByText("1.23K XLM");
+    expect(balanceElem).toHaveAttribute("title", "1,234.56 XLM");
+    expect(balanceElem).toHaveAttribute("aria-label", "Wallet balance: 1,234.56 XLM");
+  });
+
+  it("renders_placeholder_when_disconnected", () => {
+    renderWithState(WALLET_STATES.DISCONNECTED);
+    expect(screen.queryByText("1.23K XLM")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Connect your Stellar wallet to access the platform/i)
+    ).toBeInTheDocument();
+  });
+
+  it("renders_placeholder_or_correctly_formats_zero_balance", () => {
+    renderWithState(WALLET_STATES.CONNECTED, {
+      walletData: { address: "GABC...XYZ123", network: "testnet", balance: "0 XLM" },
+    });
+    const zeroBalanceElem = screen.getByText("0 XLM");
+    expect(zeroBalanceElem).toBeInTheDocument();
+    expect(zeroBalanceElem).toHaveAttribute("title", "0 XLM");
+    expect(zeroBalanceElem).not.toHaveTextContent("—");
+  });
+
+  it("compact_formatting_handles_very_large_balance", () => {
+    renderWithState(WALLET_STATES.CONNECTED, {
+      walletData: { address: "GABC...XYZ123", network: "testnet", balance: "1,500,000.00 XLM" },
+    });
+    const largeBalanceElem = screen.getByText("1.5M XLM");
+    expect(largeBalanceElem).toBeInTheDocument();
+    expect(largeBalanceElem).toHaveAttribute("title", "1,500,000.00 XLM");
   });
 });

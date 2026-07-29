@@ -14,7 +14,7 @@ describe("PDF Validation Helper", () => {
 
     it("escapes HTML special characters", () => {
       const maliciousFilename = '<script>alert("xss")</script>.pdf';
-      const result = sanitizeFilename(maliciousFilename);
+      const result = sanitizeFilename(maliciousFilename, 100);
       // Check that HTML special characters are escaped
       expect(result).not.toContain("<script>");
       expect(result).not.toContain("</script>");

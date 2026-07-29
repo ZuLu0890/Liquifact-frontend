@@ -7,6 +7,7 @@ globalThis.fetch = jest.fn();
 
 // Mock magic-byte validation: jsdom's File.arrayBuffer() is unreliable.
 jest.mock("../lib/validation/pdf", () => ({
+  ...jest.requireActual("../lib/validation/pdf"),
   isPdfMagicValid: jest.fn(),
   validatePdfFile: jest.fn().mockResolvedValue({ valid: true }),
   sanitizeFilename: jest.fn((name) => name),
@@ -35,6 +36,17 @@ jest.mock("../app/copy/en", () => ({
       submitUploading: "Uploading...",
       submitTokenizing: "Tokenizing...",
       submitIdle: "Submit",
+      spinnerLabel: "Loading",
+      resetAction: "Upload another invoice",
+      resetAriaLabel: "Upload another invoice",
+      errorNoFile: "No file selected.",
+      errorEmpty: "The selected file is empty.",
+      errorInvalidType: "Only PDF files are allowed.",
+      errorInvalidPdf: "The file is not a valid PDF.",
+      errorOversize: "File is {sizeMb} MB — exceeds the {maxSizeMb} MB limit.",
+      errorReadFailed: "Could not read the file. Please try again.",
+      errorUploadFailed: "Upload failed. Please try again.",
+      errorUploadStatus: "Upload failed with status {status}.",
     },
   },
 }));
@@ -43,6 +55,7 @@ describe("UploadZone Size Validation", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (isPdfMagicValid as jest.Mock).mockResolvedValue(true);
+    (globalThis.fetch as jest.Mock).mockClear();
   });
 
   it("allows file upload if size is within FILE_CONSTRAINTS.maxSizeBytes", async () => {
@@ -58,7 +71,7 @@ describe("UploadZone Size Validation", () => {
     await user.upload(input, validFile);
 
     const submitBtn = screen.getByRole("button", { name: "Submit" });
-    expect(submitBtn).not.toBeDisabled();
+    await waitFor(() => expect(submitBtn).not.toBeDisabled());
 
     // Submit
     (globalThis.fetch as jest.Mock).mockResolvedValueOnce({

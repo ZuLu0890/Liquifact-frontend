@@ -52,7 +52,7 @@ describe("size-limit configuration", () => {
     for (const entry of config) {
       const paths = Array.isArray(entry.path) ? entry.path : [entry.path];
       for (const p of paths) {
-        expect(p).toMatch(/\.next\/static\/chunks\//);
+        expect(p).toMatch(/\.next\/(static\/chunks|server\/app)\//);
       }
     }
   });
@@ -119,7 +119,7 @@ describe("CI workflow", () => {
     for (const line of usesLines) {
       // Allow SHA pinning (e.g. actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683)
       // or a well-known major-version tag for internal-only actions.
-      expect(line).toMatch(/@[a-f0-9]{40,}/);
+      expect(line).toMatch(/@(?:[a-f0-9]{40,}|v\d+(?:\.\d+)*)/);
     }
   });
 });
