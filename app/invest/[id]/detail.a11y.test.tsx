@@ -13,7 +13,7 @@ jest.mock("next/navigation", () => {
   };
 });
 
-jest.mock("@/components/WalletContext", () => {
+jest.mock("@/components/WalletProvider", () => {
   return {
     WALLET_STATES: {
       DISCONNECTED: "disconnected",

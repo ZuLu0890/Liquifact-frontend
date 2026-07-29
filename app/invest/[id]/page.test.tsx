@@ -52,7 +52,7 @@ jest.mock("@/components/ToastProvider", () => ({
   useToast: () => mockToast,
 }));
 
-jest.mock("@/components/WalletContext", () => ({
+jest.mock("@/components/WalletProvider", () => ({
   WALLET_STATES: {
     DISCONNECTED: "disconnected",
     CONNECTING: "connecting",
@@ -152,7 +152,7 @@ jest.mock("../lib", () => ({
 
 import { notFound } from "next/navigation";
 import { getInvoiceById } from "../lib";
-import { useWallet, WALLET_STATES } from "@/components/WalletContext";
+import { useWallet, WALLET_STATES } from "@/components/WalletProvider";
 import { useOptimisticFund, FUNDING_STATES } from "@/lib/hooks/useOptimisticFund";
 import InvoiceDetailPage from "./page";
 import FundActions, { copyInvoiceUrl, copyToClipboardFallback } from "./FundActions";

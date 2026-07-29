@@ -893,6 +893,14 @@ function FundInvoiceButton() {
 
 The provider rehydrates from storage **after mount** (SSR-safe). `disconnect()` clears storage immediately. See [WALLET_INTEGRATION_CONTRACT.md](WALLET_INTEGRATION_CONTRACT.md) for the full integration contract.
 
+**Funding-intent flow:** On the invoice detail page (`/invest/[id]`), the Fund button is wallet-gated:
+- **Disconnected**: clicking the Fund button calls `connect()` to prompt wallet connection before funding.
+- **Connecting / No wallet**: the button is disabled to prevent duplicate connection attempts.
+- **Connected**: the Fund button is enabled and the partial-funding form (`FundAmountInput`) can be submitted.
+- **Pending (in-flight)**: while a funding transaction is in progress, both the Fund button and the amount input are disabled and the button shows "Funding…" with `aria-busy="true"`.
+
+The wallet hook is consumed via `useWallet()` from `@/components/WalletProvider` (the canonical provider source), destructuring only `{ state, connect }` since `FundActions` does not need `walletData` or `disconnect`.
+
 ### NavMenu
 
 `components/NavMenu.jsx` — Responsive site-wide header navigation used on every page.

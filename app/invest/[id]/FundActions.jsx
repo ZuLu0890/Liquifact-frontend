@@ -33,7 +33,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/components/ToastProvider";
-import { useWallet, WALLET_STATES } from "@/components/WalletContext";
+// Canonical wallet hook — imports from the provider source of truth,
+// not the deprecated WalletContext shim.
+import { useWallet, WALLET_STATES } from "@/components/WalletProvider";
 import FundAmountInput from "@/components/FundAmountInput";
 import { useMarketplace } from "@/app/invest/MarketplaceContext";
 import { copy } from "@/app/copy/en";
@@ -102,6 +104,10 @@ export async function copyInvoiceUrl(id) {
  *   Defaults to a mock that resolves immediately (placeholder until Stellar lands).
  */
 export default function FundActions({ id, status, maxAmount, currency, yieldValue, performFund }) {
+  // Wallet gating: destructure only the canonical shape
+  // { state, walletData, connect, disconnect } from the consolidated provider.
+  // `state` is aliased to `walletState` for clarity in the Fund button
+  // gating logic below.
   const { state: walletState, connect } = useWallet();
   const toast = useToast();
   const [isCopying, setIsCopying] = useState(false);
